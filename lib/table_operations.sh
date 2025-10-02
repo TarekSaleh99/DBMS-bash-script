@@ -121,60 +121,58 @@ insert_row() {
   read -p "Enter table name: " tname
   path="$DB_ROOT/$db/$tname"
 
-  # Check if table exists
+  # 1) Check if table exists
   if [ ! -f "$path" ]; then
     echo "❌ Table not found!"
     return
   fi
 
-  # --- Read table structure ---
-  cols=$(grep "^Columns:" "$path" | cut -d':' -f2)
-  types=$(grep "^Types:" "$path" | cut -d':' -f2)
-  pk=$(grep "^PK:" "$path" | cut -d':' -f2)
+  # 2) Extract schema
+  cols=$(sed -n '1s/Columns://p' "$path")   # first line, strip "Columns:"
+  types=$(sed -n '2s/Types://p' "$path")    # second line, strip "Types:"
+  pk=$(sed -n '3s/PK://p' "$path")          # third line, strip "PK:"
 
-  # Convert into arrays
+  # Turn comma-separated cols/types into arrays
   IFS=',' read -ra col_arr <<< "$cols"
   IFS=',' read -ra type_arr <<< "$types"
 
-  row=""
+  # 3) Build new row
+  new_row=""
 
-  # Loop through each column
   for i in "${!col_arr[@]}"; do
-    cname=${col_arr[$i]}   # column name
-    ctype=${type_arr[$i]} # column type
+    cname=${col_arr[$i]}
+    ctype=${type_arr[$i]}
 
-    while true; do
-      read -p "Enter value for $cname ($ctype): " value
+    # ask for value
+    read -p "Enter value for column '$cname' ($ctype): " value
 
-      # --- datatype check ---
-      if [[ $ctype == "int" && ! $value =~ ^[0-9]+$ ]]; then
-        echo "❌ $cname must be an integer."
-        continue
+    # datatype check with awk-like regex
+    if [[ "$ctype" == "int" && ! "$value" =~ ^[0-9]+$ ]]; then
+      echo "❌ Invalid input: '$cname' must be an integer."
+      return
+    fi
+
+    # primary key check → must be unique
+    if [[ "$cname" == "$pk" ]]; then
+      # search column index with awk
+      col_index=$((i+1))
+      exists=$(awk -F',' -v idx="$col_index" -v val="$value" 'NR>4 && $idx==val {print "yes"}' "$path")
+      if [[ "$exists" == "yes" ]]; then
+        echo "❌ Duplicate primary key '$value'."
+        return
       fi
+    fi
 
-      # --- primary key check ---
-      if [[ $cname == "$pk" ]]; then
-        if awk -F',' -v col=$((i+1)) -v val="$value" 'NR>3 {if ($col == val) {exit 1}}' "$path"; then
-          : # ok, no duplicate found
-        else
-          echo "❌ Duplicate primary key '$value'."
-          continue
-        fi
-      fi
-
-      break
-    done
-
-    # Add to row string
-    if [ -z "$row" ]; then
-      row="$value"
+    # append to row
+    if [ -z "$new_row" ]; then
+      new_row="$value"
     else
-      row="$row,$value"
+      new_row="$new_row,$value"
     fi
   done
 
-  # Append the new row to the file
-  echo "$row" >> "$path"
+  # 4) Append row to file
+  echo "$new_row" >> "$path"
   echo "✅ Row inserted successfully!"
 }
 
@@ -186,35 +184,44 @@ select_rows() {
 
   # Check if table exists
   if [ ! -f "$path" ]; then
-    echo "❌ Table not found!"
+    echo "Table not found!"
     return
   fi
 
-  # Read structure
-  cols=$(grep "^Columns:" "$path" | cut -d':' -f2)
+  # Extract metadata
+  cols=$(sed -n '1s/^Columns://p' "$path")
+  types=$(sed -n '2s/^Types://p' "$path")
+  pk=$(sed -n '3s/^PK://p' "$path")
 
-  IFS=',' read -ra col_arr <<< "$cols"
+  # Print table info
+  echo "--------------------------------------"
+  echo "Table: $tname"
+  echo "Primary Key: $pk"
+  echo "--------------------------------------"
 
-  echo "-----------------------------------------"
-  echo "📋 Data in table '$tname'"
-  echo "-----------------------------------------"
+  # Use awk to print headers + rows
+  awk -F',' -v header="$cols" '
+    BEGIN {
+      # Print header row first
+      split(header, h, ",")
+      printf "%-5s", "Row"      # first column = row number
+      for (i=1; i<=length(h); i++) {
+        printf "| %-15s", h[i]  # print column headers with padding
+      }
+      print ""
+      print "-------------------------------------------------------------------"
+    }
+    NR>3 {
+      # Print actual data rows
+      printf "%-5d", NR-3
+      for (i=1; i<=NF; i++) {
+        printf "| %-15s", $i
+      }
+      print ""
+    }
+  ' "$path"
 
-  # Print header row (columns)
-  for cname in "${col_arr[@]}"; do
-    printf "%-15s" "$cname"
-  done
-  echo
-  echo "-----------------------------------------"
-
-  # Print each data row (skip first 3 lines)
-  tail -n +4 "$path" | while IFS=',' read -ra fields; do
-    for field in "${fields[@]}"; do
-      printf "%-15s" "$field"
-    done
-    echo
-  done
-
-  echo "-----------------------------------------"
+  echo "-------------------------------------------------------------------"
 }
 
 delete_row() {
@@ -238,7 +245,7 @@ delete_row() {
 
   # Show only data rows, numbered from 1 (we skip header lines 1-3)
   echo "Current data rows in table '$tname':"
-  tail -n +5 "$path" | nl -v1 -w3 -s". "
+  tail -n +4 "$path" | nl -v1 -w3 -s". "
 
   # Ask which data-row number to delete (1..data_lines)
   read -p "Enter data row number to delete (1-$data_lines): " rownum
@@ -267,4 +274,107 @@ delete_row() {
     rm -f "$tmp"
     echo "Failed to delete row. No changes made."
   fi
+}
+
+
+update_row() {
+  db=$1
+  read -p "Enter table name: " tname
+  path="$DB_ROOT/$db/$tname"
+
+  if [ ! -f "$path" ]; then
+    echo "Table '$tname' does not exist!"
+    return
+  fi
+
+  # Read metadata
+  cols=$(sed -n '1p' "$path")        # column names
+  types=$(sed -n '2p' "$path")       # column types
+  pk=$(sed -n '3p' "$path" | cut -d':' -f2)
+
+  # Show rows (using same awk from select_rows)
+  awk -F',' -v header="$cols" '
+    BEGIN {
+      split(header, h, ",")
+      printf "%-5s", "Row"
+      for (i=1; i<=length(h); i++) {
+        printf "| %-15s", h[i]
+      }
+      print ""
+      print "-------------------------------------------------------------------"
+    }
+    NR>3 {
+      printf "%-5d", NR-3
+      for (i=1; i<=NF; i++) {
+        printf "| %-15s", $i
+      }
+      print ""
+    }
+  ' "$path"
+
+  echo "-------------------------------------------------------------------"
+
+  # Ask user which row to update
+  total_rows=$(($(wc -l < "$path") - 3))
+  if [ "$total_rows" -le 0 ]; then
+    echo "No rows available to update."
+    return
+  fi
+
+  read -p "Enter row number to update (1-$total_rows): " rownum
+  if ! [[ "$rownum" =~ ^[0-9]+$ ]] || [ "$rownum" -lt 1 ] || [ "$rownum" -gt "$total_rows" ]; then
+    echo "Invalid row number!"
+    return
+  fi
+
+  # Ask which column to update
+  IFS=',' read -ra colarr <<< "$cols"
+  IFS=',' read -ra typearr <<< "$types"
+
+  echo "Columns:"
+  for i in "${!colarr[@]}"; do
+    echo "$((i+1))) ${colarr[$i]} (type: ${typearr[$i]})"
+  done
+
+  read -p "Enter column number to update: " colnum
+  if ! [[ "$colnum" =~ ^[0-9]+$ ]] || [ "$colnum" -lt 1 ] || [ "$colnum" -gt "${#colarr[@]}" ]; then
+    echo "Invalid column number!"
+    return
+  fi
+
+  colname=${colarr[$((colnum-1))]}
+  coltype=${typearr[$((colnum-1))]}
+
+  # Prevent updating primary key
+  if [ "$colname" == "$pk" ]; then
+    echo "Cannot update primary key column!"
+    return
+  fi
+
+  # Get new value
+  read -p "Enter new value for column '$colname': " newval
+
+  # Validate type
+  if [ "$coltype" == "int" ]; then
+    if ! [[ "$newval" =~ ^[0-9]+$ ]]; then
+      echo "Invalid value! Column '$colname' must be integer."
+      return
+    fi
+  fi
+
+  # Update the row with sed
+  line_num=$((rownum+3))  # real line number in file
+  old_line=$(sed -n "${line_num}p" "$path")
+
+  # Split old line into array
+  IFS=',' read -ra fields <<< "$old_line"
+  fields[$((colnum-1))]="$newval"
+
+  # Join fields back
+  new_line=$(IFS=','; echo "${fields[*]}")
+
+  # Replace line in file
+  sed -i "${line_num}s/.*/$new_line/" "$path"
+
+  echo "Row $rownum updated successfully in '$tname'."
 }
