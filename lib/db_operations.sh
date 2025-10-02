@@ -12,8 +12,10 @@ create_db() {
 }
 
 list_dbs() {
-    echo "Databases:"
+    echo " "
+    echo "Databases found:"
     ls "$DB_ROOT"
+    echo " "
 }
 
 connect_db() {
@@ -24,6 +26,7 @@ connect_db() {
         table_menu "$dbname"
     else
         echo "Database '$dbname' does not exist."
+        list_dbs
     fi
 }
 
