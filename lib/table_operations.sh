@@ -275,3 +275,106 @@ delete_row() {
     echo "Failed to delete row. No changes made."
   fi
 }
+
+
+update_row() {
+  db=$1
+  read -p "Enter table name: " tname
+  path="$DB_ROOT/$db/$tname"
+
+  if [ ! -f "$path" ]; then
+    echo "Table '$tname' does not exist!"
+    return
+  fi
+
+  # Read metadata
+  cols=$(sed -n '1p' "$path")        # column names
+  types=$(sed -n '2p' "$path")       # column types
+  pk=$(sed -n '3p' "$path" | cut -d':' -f2)
+
+  # Show rows (using same awk from select_rows)
+  awk -F',' -v header="$cols" '
+    BEGIN {
+      split(header, h, ",")
+      printf "%-5s", "Row"
+      for (i=1; i<=length(h); i++) {
+        printf "| %-15s", h[i]
+      }
+      print ""
+      print "-------------------------------------------------------------------"
+    }
+    NR>3 {
+      printf "%-5d", NR-3
+      for (i=1; i<=NF; i++) {
+        printf "| %-15s", $i
+      }
+      print ""
+    }
+  ' "$path"
+
+  echo "-------------------------------------------------------------------"
+
+  # Ask user which row to update
+  total_rows=$(($(wc -l < "$path") - 3))
+  if [ "$total_rows" -le 0 ]; then
+    echo "No rows available to update."
+    return
+  fi
+
+  read -p "Enter row number to update (1-$total_rows): " rownum
+  if ! [[ "$rownum" =~ ^[0-9]+$ ]] || [ "$rownum" -lt 1 ] || [ "$rownum" -gt "$total_rows" ]; then
+    echo "Invalid row number!"
+    return
+  fi
+
+  # Ask which column to update
+  IFS=',' read -ra colarr <<< "$cols"
+  IFS=',' read -ra typearr <<< "$types"
+
+  echo "Columns:"
+  for i in "${!colarr[@]}"; do
+    echo "$((i+1))) ${colarr[$i]} (type: ${typearr[$i]})"
+  done
+
+  read -p "Enter column number to update: " colnum
+  if ! [[ "$colnum" =~ ^[0-9]+$ ]] || [ "$colnum" -lt 1 ] || [ "$colnum" -gt "${#colarr[@]}" ]; then
+    echo "Invalid column number!"
+    return
+  fi
+
+  colname=${colarr[$((colnum-1))]}
+  coltype=${typearr[$((colnum-1))]}
+
+  # Prevent updating primary key
+  if [ "$colname" == "$pk" ]; then
+    echo "Cannot update primary key column!"
+    return
+  fi
+
+  # Get new value
+  read -p "Enter new value for column '$colname': " newval
+
+  # Validate type
+  if [ "$coltype" == "int" ]; then
+    if ! [[ "$newval" =~ ^[0-9]+$ ]]; then
+      echo "Invalid value! Column '$colname' must be integer."
+      return
+    fi
+  fi
+
+  # Update the row with sed
+  line_num=$((rownum+3))  # real line number in file
+  old_line=$(sed -n "${line_num}p" "$path")
+
+  # Split old line into array
+  IFS=',' read -ra fields <<< "$old_line"
+  fields[$((colnum-1))]="$newval"
+
+  # Join fields back
+  new_line=$(IFS=','; echo "${fields[*]}")
+
+  # Replace line in file
+  sed -i "${line_num}s/.*/$new_line/" "$path"
+
+  echo "Row $rownum updated successfully in '$tname'."
+}
