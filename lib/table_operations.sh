@@ -193,25 +193,35 @@ select_rows() {
   types=$(sed -n '2s/^Types://p' "$path")
   pk=$(sed -n '3s/^PK://p' "$path")
 
-  # Print column headers
+  # Print table info
   echo "--------------------------------------"
   echo "Table: $tname"
-  echo "Columns: $cols"
   echo "Primary Key: $pk"
   echo "--------------------------------------"
 
-  # Use awk to pretty print rows
-  awk -F',' '
+  # Use awk to print headers + rows
+  awk -F',' -v header="$cols" '
+    BEGIN {
+      # Print header row first
+      split(header, h, ",")
+      printf "%-5s", "Row"      # first column = row number
+      for (i=1; i<=length(h); i++) {
+        printf "| %-15s", h[i]  # print column headers with padding
+      }
+      print ""
+      print "-------------------------------------------------------------------"
+    }
     NR>3 {
-      printf "%-5d", NR-3     # Row number
+      # Print actual data rows
+      printf "%-5d", NR-3
       for (i=1; i<=NF; i++) {
-        printf "| %-15s", $i  # Print each field with padding
+        printf "| %-15s", $i
       }
       print ""
     }
   ' "$path"
 
-  echo "--------------------------------------"
+  echo "-------------------------------------------------------------------"
 }
 
 delete_row() {
