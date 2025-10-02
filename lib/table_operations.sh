@@ -184,35 +184,34 @@ select_rows() {
 
   # Check if table exists
   if [ ! -f "$path" ]; then
-    echo "❌ Table not found!"
+    echo "Table not found!"
     return
   fi
 
-  # Read structure
-  cols=$(grep "^Columns:" "$path" | cut -d':' -f2)
+  # Extract metadata
+  cols=$(sed -n '1s/^Columns://p' "$path")
+  types=$(sed -n '2s/^Types://p' "$path")
+  pk=$(sed -n '3s/^PK://p' "$path")
 
-  IFS=',' read -ra col_arr <<< "$cols"
+  # Print column headers
+  echo "--------------------------------------"
+  echo "Table: $tname"
+  echo "Columns: $cols"
+  echo "Primary Key: $pk"
+  echo "--------------------------------------"
 
-  echo "-----------------------------------------"
-  echo "📋 Data in table '$tname'"
-  echo "-----------------------------------------"
+  # Use awk to pretty print rows
+  awk -F',' '
+    NR>3 {
+      printf "%-5d", NR-3     # Row number
+      for (i=1; i<=NF; i++) {
+        printf "| %-15s", $i  # Print each field with padding
+      }
+      print ""
+    }
+  ' "$path"
 
-  # Print header row (columns)
-  for cname in "${col_arr[@]}"; do
-    printf "%-15s" "$cname"
-  done
-  echo
-  echo "-----------------------------------------"
-
-  # Print each data row (skip first 3 lines)
-  tail -n +4 "$path" | while IFS=',' read -ra fields; do
-    for field in "${fields[@]}"; do
-      printf "%-15s" "$field"
-    done
-    echo
-  done
-
-  echo "-----------------------------------------"
+  echo "--------------------------------------"
 }
 
 delete_row() {
