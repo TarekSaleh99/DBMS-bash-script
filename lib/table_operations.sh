@@ -121,60 +121,58 @@ insert_row() {
   read -p "Enter table name: " tname
   path="$DB_ROOT/$db/$tname"
 
-  # Check if table exists
+  # 1) Check if table exists
   if [ ! -f "$path" ]; then
     echo "❌ Table not found!"
     return
   fi
 
-  # --- Read table structure ---
-  cols=$(grep "^Columns:" "$path" | cut -d':' -f2)
-  types=$(grep "^Types:" "$path" | cut -d':' -f2)
-  pk=$(grep "^PK:" "$path" | cut -d':' -f2)
+  # 2) Extract schema
+  cols=$(sed -n '1s/Columns://p' "$path")   # first line, strip "Columns:"
+  types=$(sed -n '2s/Types://p' "$path")    # second line, strip "Types:"
+  pk=$(sed -n '3s/PK://p' "$path")          # third line, strip "PK:"
 
-  # Convert into arrays
+  # Turn comma-separated cols/types into arrays
   IFS=',' read -ra col_arr <<< "$cols"
   IFS=',' read -ra type_arr <<< "$types"
 
-  row=""
+  # 3) Build new row
+  new_row=""
 
-  # Loop through each column
   for i in "${!col_arr[@]}"; do
-    cname=${col_arr[$i]}   # column name
-    ctype=${type_arr[$i]} # column type
+    cname=${col_arr[$i]}
+    ctype=${type_arr[$i]}
 
-    while true; do
-      read -p "Enter value for $cname ($ctype): " value
+    # ask for value
+    read -p "Enter value for column '$cname' ($ctype): " value
 
-      # --- datatype check ---
-      if [[ $ctype == "int" && ! $value =~ ^[0-9]+$ ]]; then
-        echo "❌ $cname must be an integer."
-        continue
+    # datatype check with awk-like regex
+    if [[ "$ctype" == "int" && ! "$value" =~ ^[0-9]+$ ]]; then
+      echo "❌ Invalid input: '$cname' must be an integer."
+      return
+    fi
+
+    # primary key check → must be unique
+    if [[ "$cname" == "$pk" ]]; then
+      # search column index with awk
+      col_index=$((i+1))
+      exists=$(awk -F',' -v idx="$col_index" -v val="$value" 'NR>4 && $idx==val {print "yes"}' "$path")
+      if [[ "$exists" == "yes" ]]; then
+        echo "❌ Duplicate primary key '$value'."
+        return
       fi
+    fi
 
-      # --- primary key check ---
-      if [[ $cname == "$pk" ]]; then
-        if awk -F',' -v col=$((i+1)) -v val="$value" 'NR>3 {if ($col == val) {exit 1}}' "$path"; then
-          : # ok, no duplicate found
-        else
-          echo "❌ Duplicate primary key '$value'."
-          continue
-        fi
-      fi
-
-      break
-    done
-
-    # Add to row string
-    if [ -z "$row" ]; then
-      row="$value"
+    # append to row
+    if [ -z "$new_row" ]; then
+      new_row="$value"
     else
-      row="$row,$value"
+      new_row="$new_row,$value"
     fi
   done
 
-  # Append the new row to the file
-  echo "$row" >> "$path"
+  # 4) Append row to file
+  echo "$new_row" >> "$path"
   echo "✅ Row inserted successfully!"
 }
 
@@ -238,7 +236,7 @@ delete_row() {
 
   # Show only data rows, numbered from 1 (we skip header lines 1-3)
   echo "Current data rows in table '$tname':"
-  tail -n +5 "$path" | nl -v1 -w3 -s". "
+  tail -n +4 "$path" | nl -v1 -w3 -s". "
 
   # Ask which data-row number to delete (1..data_lines)
   read -p "Enter data row number to delete (1-$data_lines): " rownum
