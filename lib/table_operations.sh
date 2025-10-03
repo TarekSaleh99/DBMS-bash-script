@@ -156,7 +156,7 @@ insert_row() {
     if [[ "$cname" == "$pk" ]]; then
       # search column index with awk
       col_index=$((i+1))
-      exists=$(awk -F',' -v idx="$col_index" -v val="$value" 'NR>4 && $idx==val {print "yes"}' "$path")
+      exists=$(awk -F',' -v idx="$col_index" -v val="$value" 'NR>3 && $idx==val {print "yes"}' "$path")
       if [[ "$exists" == "yes" ]]; then
         echo "❌ Duplicate primary key '$value'."
         return
